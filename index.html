@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>地理院地図 + コンパス + 偏角補正 + リアルタイム線</title>
+  <title>簡易版</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
@@ -28,9 +28,10 @@
   let userLat = 35.6812, userLng = 139.7671;
   let currentHeading = 0;
   let declination = 0;
+  let isTracking = false;
 
   // --- 地図初期化 ---
-  map = L.map('map').setView([userLat, userLng], 8);
+  map = L.map('map').setView([userLat, userLng], 10);
   L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
     attribution: '地理院地図'
   }).addTo(map);
@@ -43,19 +44,32 @@
     return 6.5 + (lat - 31) * 0.3; // 九州6.5°〜北海道9°くらい
   }
 
-  // --- 現在地取得 ---
-  navigator.geolocation.getCurrentPosition(pos => {
-    userLat = pos.coords.latitude;
-    userLng = pos.coords.longitude;
-    declination = calcDeclination(userLat);
-    map.setView([userLat, userLng], 10);
-    marker.setLatLng([userLat, userLng]);
-    updateLine();
-  });
+  // --- リアルタイム位置追跡 ---
+  if (navigator.geolocation) {
+    navigator.geolocation.watchPosition(pos => {
+      userLat = pos.coords.latitude;
+      userLng = pos.coords.longitude;
+      declination = calcDeclination(userLat);
+      marker.setLatLng([userLat, userLng]);
+      if (!isTracking) {
+        map.setView([userLat, userLng], 12);
+        isTracking = true;
+      }
+      updateLine();
+    }, err => {
+      console.warn("位置取得エラー:", err);
+    }, {
+      enableHighAccuracy: true,  // 高精度GPS
+      maximumAge: 0,
+      timeout: 10000
+    });
+  } else {
+    alert("このブラウザは位置情報に対応していません。");
+  }
 
   // --- 方角線を更新（100km先まで描画） ---
   function updateLine() {
-    const distanceKm = 100; // ← ここで長さ設定
+    const distanceKm = 100; // ← 長さ設定
     const R = 6371; // 地球半径[km]
     const brng = (currentHeading + declination) * Math.PI / 180;
     const lat1 = userLat * Math.PI / 180;
@@ -73,7 +87,7 @@
 
     line.setLatLngs([[userLat, userLng], [lat2deg, lon2deg]]);
     document.getElementById("info").innerText =
-      `方位: ${currentHeading.toFixed(1)}° | 偏角補正後: ${(currentHeading+declination).toFixed(1)}° | 長さ: ${distanceKm}km`;
+      `位置: ${userLat.toFixed(5)}, ${userLng.toFixed(5)} | 方位: ${currentHeading.toFixed(1)}° | 補正後: ${(currentHeading+declination).toFixed(1)}°`;
   }
 
   // --- センサー許可ボタン ---
@@ -94,7 +108,7 @@
   }
 
   function handleOrientation(event) {
-    const heading = event.webkitCompassHeading ?? (360 - event.alpha); // Safari対策
+    const heading = event.webkitCompassHeading ?? (360 - event.alpha); // iOS/Safari対策
     if (heading != null && !isNaN(heading)) {
       currentHeading = heading;
       updateLine();
