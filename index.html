@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>地理院地図 + コンパス + 偏角補正</title>
+  <title>地理院地図 + コンパス + 偏角補正 + リアルタイム線</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
@@ -11,7 +11,7 @@
     #buttonBox {
       position: absolute; top: 10px; left: 10px;
       background: rgba(255,255,255,0.9); padding: 10px; border-radius: 8px;
-      font-family: sans-serif;
+      font-family: sans-serif; z-index: 1000;
     }
   </style>
 </head>
@@ -25,49 +25,58 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
   let map, marker, line;
-  let userLat, userLng;
+  let userLat = 35.6812, userLng = 139.7671;
   let currentHeading = 0;
-  let declination = 0; // 偏角
+  let declination = 0;
 
-  // 地図初期化
-  map = L.map('map').setView([35.6812, 139.7671], 14);
+  // --- 地図初期化 ---
+  map = L.map('map').setView([userLat, userLng], 8);
   L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
     attribution: '地理院地図'
   }).addTo(map);
 
-  marker = L.marker([35.6812, 139.7671]).addTo(map);
+  marker = L.marker([userLat, userLng]).addTo(map);
   line = L.polyline([], { color: 'red', weight: 3 }).addTo(map);
 
-  // 偏角を簡易計算（おおまかなモデル：日本国内 ±1°以内）
-  function calcDeclination(lat, lng) {
-    // 日本近辺での簡易近似（磁北が西寄り）
-    // 九州で約6.5°, 北海道で約9°, 東京は約7°
-    return 6.5 + (lat - 31) * 0.3;
+  // --- 偏角の近似モデル（日本国内 ±1°以内） ---
+  function calcDeclination(lat) {
+    return 6.5 + (lat - 31) * 0.3; // 九州6.5°〜北海道9°くらい
   }
 
-  // 現在地取得
+  // --- 現在地取得 ---
   navigator.geolocation.getCurrentPosition(pos => {
     userLat = pos.coords.latitude;
     userLng = pos.coords.longitude;
-    declination = calcDeclination(userLat, userLng);
-    map.setView([userLat, userLng], 16);
+    declination = calcDeclination(userLat);
+    map.setView([userLat, userLng], 10);
     marker.setLatLng([userLat, userLng]);
     updateLine();
   });
 
-  // 方角線更新
+  // --- 方角線を更新（100km先まで描画） ---
   function updateLine() {
-    if (!userLat || !userLng) return;
-    const R = 0.005; // 約500m先まで描画
-    const bearing = (currentHeading + declination) * Math.PI / 180;
-    const lat2 = userLat + R * Math.cos(bearing);
-    const lng2 = userLng + R * Math.sin(bearing);
-    line.setLatLngs([[userLat, userLng], [lat2, lng2]]);
+    const distanceKm = 100; // ← ここで長さ設定
+    const R = 6371; // 地球半径[km]
+    const brng = (currentHeading + declination) * Math.PI / 180;
+    const lat1 = userLat * Math.PI / 180;
+    const lon1 = userLng * Math.PI / 180;
+
+    const lat2 = Math.asin(Math.sin(lat1) * Math.cos(distanceKm / R) +
+                  Math.cos(lat1) * Math.sin(distanceKm / R) * Math.cos(brng));
+    const lon2 = lon1 + Math.atan2(
+      Math.sin(brng) * Math.sin(distanceKm / R) * Math.cos(lat1),
+      Math.cos(distanceKm / R) - Math.sin(lat1) * Math.sin(lat2)
+    );
+
+    const lat2deg = lat2 * 180 / Math.PI;
+    const lon2deg = lon2 * 180 / Math.PI;
+
+    line.setLatLngs([[userLat, userLng], [lat2deg, lon2deg]]);
     document.getElementById("info").innerText =
-      `方位: ${currentHeading.toFixed(1)}°, 偏角補正後: ${(currentHeading+declination).toFixed(1)}°`;
+      `方位: ${currentHeading.toFixed(1)}° | 偏角補正後: ${(currentHeading+declination).toFixed(1)}° | 長さ: ${distanceKm}km`;
   }
 
-  // コンパス許可ボタン
+  // --- センサー許可ボタン ---
   document.getElementById("permBtn").onclick = async () => {
     if (typeof DeviceOrientationEvent.requestPermission === 'function') {
       const response = await DeviceOrientationEvent.requestPermission();
@@ -78,14 +87,15 @@
     }
   };
 
+  // --- コンパスイベント開始（リアルタイム更新） ---
   function startCompass() {
     window.addEventListener("deviceorientationabsolute", handleOrientation, true);
     window.addEventListener("deviceorientation", handleOrientation, true);
   }
 
   function handleOrientation(event) {
-    const heading = event.webkitCompassHeading || event.alpha;
-    if (heading != null) {
+    const heading = event.webkitCompassHeading ?? (360 - event.alpha); // Safari対策
+    if (heading != null && !isNaN(heading)) {
       currentHeading = heading;
       updateLine();
     }
